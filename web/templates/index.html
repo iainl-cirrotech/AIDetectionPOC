@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Image Detection - Results</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 2rem; line-height: 1.45; }
+  h1 { font-size: 1.4rem; margin: 0 0 .25rem; }
+  .muted { color: #666; margin: 0 0 1rem; font-size: .9rem; }
+  .warn { background: #fff4e5; border: 1px solid #f0b37e; padding: .75rem 1rem; border-radius: 6px; }
+  table { border-collapse: collapse; width: 100%; font-size: .9rem; }
+  th, td { border: 1px solid #ddd; padding: .6rem .7rem; vertical-align: top; text-align: left; }
+  th { background: #f6f6f6; position: sticky; top: 0; }
+  img.thumb { max-width: 160px; max-height: 160px; border-radius: 4px; display: block; margin-bottom: .4rem; }
+  code { font-size: .78rem; word-break: break-all; color: #555; }
+  ul { margin: .2rem 0 .2rem 1rem; padding: 0; }
+  li { margin-bottom: .2rem; }
+  .band { display: inline-block; padding: .15rem .5rem; border-radius: 999px; font-weight: 600; font-size: .8rem; }
+  .band-High { background: #fde2e1; color: #8a1f11; }
+  .band-Medium { background: #fff2cc; color: #7a5a00; }
+  .band-Low { background: #e2f0d9; color: #2f5d18; }
+  .band-Unknown { background: #e8e8e8; color: #444; }
+  .overall { display: inline-block; padding: .3rem .6rem; border-radius: 6px; font-weight: 700; font-size: .95rem; }
+  .overall-High { background: #f8d7da; color: #7a1113; }
+  .overall-Medium { background: #ffe8a1; color: #6b5200; }
+  .overall-Low { background: #d6ecd2; color: #245018; }
+  .overall-Unknown { background: #e8e8e8; color: #444; }
+  .basis { font-size: .78rem; color: #666; margin: .25rem 0 .6rem; }
+  .score { font-size: 1.3rem; font-weight: 700; }
+  .prov { font-size: .82rem; color: #444; margin-top: .3rem; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Emailed image - AI / alteration detection</h1>
+  <p class="muted">Processing region: {{ region }} &middot; This view shows the detection result and its audit evidence only.</p>
+</header>
+
+{% if not storage_enabled %}
+<p class="warn">Result storage is not configured for this deployment, so there is nothing to display.</p>
+{% elif not records %}
+<p class="muted">No images have been processed yet.</p>
+{% else %}
+<table>
+  <thead>
+    <tr>
+      <th>Email</th>
+      <th>Image</th>
+      <th>Detection result</th>
+      <th>Detection evidence</th>
+      <th>Processing / audit</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for r in records %}
+    <tr>
+      <td>
+        <strong>{{ r.subject or "(no subject)" }}</strong><br>
+        <span class="muted">{{ r.sender or "unknown sender" }}</span><br>
+        <span class="muted">Received: {{ r.received_at_utc or "n/a" }}</span>
+      </td>
+      <td>
+        {% if r.thumbnail_blob %}
+        <img class="thumb" src="/thumb/{{ r.thumbnail_blob }}" alt="thumbnail of {{ r.filename }}">
+        {% else %}
+        <em>not stored</em>
+        {% endif %}
+        <div>{{ r.filename }}</div>
+        <code>SHA-256 {{ r.image_sha256 }}</code>
+      </td>
+      <td>
+        <div class="overall overall-{{ r.overall_severity }}">{{ r.overall_label or "n/a" }}</div>
+        <div class="basis">basis: {{ r.overall_basis or "none" }}</div>
+        <div class="prov">
+          <strong>Classifier score:</strong> {{ r.probability_display }} ({{ r.band }})<br>
+          <strong>C2PA:</strong> {{ "present" if r.c2pa_present else "absent" }}{% if r.c2pa_state %} ({{ r.c2pa_state }}){% endif %}<br>
+          {% if r.digital_source_type %}<strong>Source type:</strong> {{ r.digital_source_type }}{% endif %}
+        </div>
+      </td>
+      <td>
+        <ul>
+        {% for item in r.evidence %}<li>{{ item }}</li>{% endfor %}
+        </ul>
+      </td>
+      <td>
+        Processed: {{ r.processed_at_utc }}<br>
+        Model: {{ r.model_name }} v{{ r.model_version }}<br>
+        Region: {{ r.processing_region }}<br>
+        <code>id {{ r.correlation_id }}</code>
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+</body>
+</html>

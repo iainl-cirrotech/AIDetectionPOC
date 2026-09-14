@@ -1,0 +1,138 @@
+{
+  "definition": {
+    "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+      "$connections": {
+        "defaultValue": {},
+        "type": "Object"
+      },
+      "sharedMailboxAddress": {
+        "type": "String"
+      },
+      "detectorUrl": {
+        "type": "String"
+      },
+      "detectorApiKey": {
+        "type": "SecureString"
+      }
+    },
+    "triggers": {
+      "When_a_new_email_arrives_in_a_shared_mailbox": {
+        "type": "ApiConnection",
+        "recurrence": {
+          "frequency": "Minute",
+          "interval": 1
+        },
+        "splitOn": "@triggerOutputs()?['body/value']",
+        "runtimeConfiguration": {
+          "secureData": {
+            "properties": [
+              "inputs",
+              "outputs"
+            ]
+          }
+        },
+        "inputs": {
+          "host": {
+            "connection": {
+              "name": "@parameters('$connections')['office365']['connectionId']"
+            }
+          },
+          "method": "get",
+          "path": "/sharedmailboxes/@{encodeURIComponent(parameters('sharedMailboxAddress'))}/messages",
+          "queries": {
+            "folderPath": "Inbox",
+            "hasAttachment": "true",
+            "importance": "Any",
+            "fetchOnlyWithAttachment": true,
+            "includeAttachments": true
+          }
+        }
+      }
+    },
+    "actions": {
+      "Has_attachments": {
+        "type": "If",
+        "expression": {
+          "and": [
+            {
+              "greater": [
+                "@length(coalesce(triggerOutputs()?['body/attachments'], json('[]')))",
+                0
+              ]
+            }
+          ]
+        },
+        "actions": {
+          "For_each_attachment": {
+            "type": "Foreach",
+            "foreach": "@triggerOutputs()?['body/attachments']",
+            "runtimeConfiguration": {
+              "concurrency": {
+                "repetitions": 1
+              }
+            },
+            "actions": {
+              "Is_image": {
+                "type": "If",
+                "expression": {
+                  "and": [
+                    {
+                      "startsWith": [
+                        "@toLower(coalesce(items('For_each_attachment')?['contentType'], ''))",
+                        "image/"
+                      ]
+                    }
+                  ]
+                },
+                "actions": {
+                  "Send_to_detector": {
+                    "type": "Http",
+                    "runtimeConfiguration": {
+                      "contentTransfer": {
+                        "transferMode": "Chunked"
+                      },
+                      "secureData": {
+                        "properties": [
+                          "inputs",
+                          "outputs"
+                        ]
+                      }
+                    },
+                    "inputs": {
+                      "method": "POST",
+                      "uri": "@parameters('detectorUrl')",
+                      "headers": {
+                        "Content-Type": "@items('For_each_attachment')?['contentType']",
+                        "x-filename": "@items('For_each_attachment')?['name']",
+                        "x-email-subject": "@triggerOutputs()?['body/subject']",
+                        "x-email-sender": "@triggerOutputs()?['body/from']?['emailAddress']?['address']",
+                        "x-email-received": "@triggerOutputs()?['body/receivedDateTime']",
+                        "x-correlation-id": "@triggerOutputs()?['body/internetMessageId']",
+                        "x-api-key": "@parameters('detectorApiKey')"
+                      },
+                      "body": "@base64ToBinary(items('For_each_attachment')?['contentBytes'])"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "outputs": {}
+  },
+  "parameters": {
+    "$connections": {
+      "value": {
+        "office365": {
+          "connectionId": "[resourceId('Microsoft.Web/connections', parameters('office365ConnectionName'))]",
+          "connectionName": "[parameters('office365ConnectionName')]",
+          "id": "[concat('/subscriptions/', subscription().subscriptionId, '/providers/Microsoft.Web/locations/', resourceGroup().location, '/managedApis/office365')]"
+        }
+      }
+    }
+  }
+}
