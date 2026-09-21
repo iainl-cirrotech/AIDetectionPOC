@@ -11,20 +11,17 @@ param namePrefix string = 'aidetect'
 @description('Internal-use shared mailbox that the Logic App monitors.')
 param sharedMailboxAddress string
 
-@description('Container image for the detector service.')
-param detectorImage string
-
-@description('Container image for the results web app.')
-param webImage string
+@description('Container image for the combined .NET detector API and results site.')
+param appImage string
 
 @description('Hugging Face model identifier for the AI-generation classifier.')
-param detectorModelId string = 'capcheck/ai-human-generated-image-detection'
+param detectorModelId string = 'Thermostatic/community-forensics-frontier-detector-2026-08'
 
 @description('Model version label recorded in every result for auditability.')
-param detectorModelVersion string = '1.0.0'
+param detectorModelVersion string = 'frontier-2026-08'
 
 @description('Optional pinned model revision (commit hash) for reproducibility.')
-param detectorModelRevision string = ''
+param detectorModelRevision string = '16db135220b318d811b207db576d90368980b595'
 
 @description('Probability at or above which the band is High.')
 param bandHighThreshold string = '0.65'
@@ -42,18 +39,28 @@ param logsRetentionDays int = 90
 @description('Days after which persisted thumbnails are automatically deleted by the storage lifecycle policy.')
 param thumbnailRetentionDays int = 7
 
+@description('Days after which result records are deleted by the application. Set to 0 to disable.')
+param resultsRetentionDays int = 30
+
 @description('Logic App run history retention in days (minimum 7). Kept low so attachment payloads are not retained.')
 param logicAppRetentionDays int = 7
 
-@description('Detector minimum replicas. Use 1 for a warm demo, 0 to scale to zero.')
-param detectorMinReplicas int = 1
+@description('Application minimum replicas. Use 1 for a warm demo, 0 to scale to zero.')
+param appMinReplicas int = 1
 
 var prefix = toLower(namePrefix)
 var storageName = take('${prefix}st${uniqueString(resourceGroup().id)}', 24)
 var acrName = take('${prefix}acr${uniqueString(resourceGroup().id)}', 50)
 var apiKey = empty(detectorApiKey) ? uniqueString(resourceGroup().id, 'detector-api-key') : detectorApiKey
 var blobEndpoint = 'https://${storageName}.blob.${environment().suffixes.storage}'
-var workflowDefinition = json(loadTextContent('../logicapp/workflow.json')).definition
+var workflowDefinition = union(json(loadTextContent('../logicapp/workflow.json')).definition, {
+  runtimeConfiguration: {
+    lifetime: {
+      unit: 'day'
+      count: logicAppRetentionDays
+    }
+  }
+})
 
 resource logAnalytics 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
   name: '${prefix}-logs'
@@ -208,7 +215,8 @@ resource containerEnv 'Microsoft.App/managedEnvironments@2024-03-01' = {
   }
 }
 
-resource detectorApp 'Microsoft.App/containerApps@2024-03-01' = {
+resource app 'Microsoft.App/containerApps@2024-03-01' = {
+  // Reuse the original detector name so existing Logic App URLs migrate in place.
   name: '${prefix}-detector'
   location: location
   identity: {
@@ -222,7 +230,7 @@ resource detectorApp 'Microsoft.App/containerApps@2024-03-01' = {
     configuration: {
       ingress: {
         external: true
-        targetPort: 8000
+        targetPort: 8080
         transport: 'http'
       }
       registries: [
@@ -241,15 +249,17 @@ resource detectorApp 'Microsoft.App/containerApps@2024-03-01' = {
     template: {
       containers: [
         {
-          name: 'detector'
-          image: detectorImage
+          name: 'app'
+          image: appImage
           resources: {
             cpu: json('1.0')
             memory: '2Gi'
           }
           env: [
             { name: 'AZURE_REGION', value: location }
-            { name: 'DETECTOR_CLASSIFIER', value: 'hf' }
+            { name: 'AZURE_CLIENT_ID', value: identity.properties.clientId }
+            { name: 'DETECTOR_CLASSIFIER', value: 'onnx' }
+            { name: 'DETECTOR_MODEL_PATH', value: '/app/models/community_forensics_frontier_fp16.onnx' }
             { name: 'DETECTOR_MODEL_ID', value: detectorModelId }
             { name: 'DETECTOR_MODEL_VERSION', value: detectorModelVersion }
             { name: 'DETECTOR_MODEL_REVISION', value: detectorModelRevision }
@@ -259,68 +269,17 @@ resource detectorApp 'Microsoft.App/containerApps@2024-03-01' = {
             { name: 'STORE_BACKEND', value: 'azure' }
             { name: 'THUMBNAIL_CONTAINER', value: 'thumbnails' }
             { name: 'RESULTS_TABLE', value: 'detections' }
-            { name: 'PERSIST_ORIGINAL_IMAGE', value: 'false' }
-            { name: 'HF_HUB_OFFLINE', value: '1' }
-            { name: 'TRANSFORMERS_OFFLINE', value: '1' }
+            { name: 'RESULTS_RETENTION_DAYS', value: string(resultsRetentionDays) }
+            { name: 'C2PATOOL_PATH', value: '/usr/local/bin/c2patool' }
+            { name: 'C2PA_TRUST_FILE', value: '/app/c2pa_trust/C2PA-TRUST-LIST.pem' }
             { name: 'APPLICATIONINSIGHTS_CONNECTION_STRING', value: appInsights.properties.ConnectionString }
             { name: 'DETECTOR_API_KEY', secretRef: 'detector-api-key' }
           ]
         }
       ]
       scale: {
-        minReplicas: detectorMinReplicas
+        minReplicas: appMinReplicas
         maxReplicas: 3
-      }
-    }
-  }
-}
-
-resource webApp 'Microsoft.App/containerApps@2024-03-01' = {
-  name: '${prefix}-web'
-  location: location
-  identity: {
-    type: 'UserAssigned'
-    userAssignedIdentities: {
-      '${identity.id}': {}
-    }
-  }
-  properties: {
-    managedEnvironmentId: containerEnv.id
-    configuration: {
-      ingress: {
-        external: true
-        targetPort: 8000
-        transport: 'http'
-      }
-      registries: [
-        {
-          server: acr.properties.loginServer
-          identity: identity.id
-        }
-      ]
-    }
-    template: {
-      containers: [
-        {
-          name: 'web'
-          image: webImage
-          resources: {
-            cpu: json('0.5')
-            memory: '1Gi'
-          }
-          env: [
-            { name: 'AZURE_REGION', value: location }
-            { name: 'STORAGE_ACCOUNT_URL', value: blobEndpoint }
-            { name: 'STORE_BACKEND', value: 'azure' }
-            { name: 'THUMBNAIL_CONTAINER', value: 'thumbnails' }
-            { name: 'RESULTS_TABLE', value: 'detections' }
-            { name: 'APPLICATIONINSIGHTS_CONNECTION_STRING', value: appInsights.properties.ConnectionString }
-          ]
-        }
-      ]
-      scale: {
-        minReplicas: 0
-        maxReplicas: 2
       }
     }
   }
@@ -342,12 +301,6 @@ resource logicApp 'Microsoft.Logic/workflows@2019-05-01' = {
   location: location
   properties: {
     definition: workflowDefinition
-    runtimeConfiguration: {
-      lifetime: {
-        unit: 'day'
-        count: logicAppRetentionDays
-      }
-    }
     parameters: {
       '$connections': {
         value: {
@@ -362,7 +315,7 @@ resource logicApp 'Microsoft.Logic/workflows@2019-05-01' = {
         value: sharedMailboxAddress
       }
       detectorUrl: {
-        value: 'https://${detectorApp.properties.configuration.ingress.fqdn}/analyze'
+        value: 'https://${app.properties.configuration.ingress.fqdn}/analyze'
       }
       detectorApiKey: {
         value: apiKey
@@ -384,8 +337,8 @@ resource storageDiagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-pr
   }
 }
 
-output webUrl string = 'https://${webApp.properties.configuration.ingress.fqdn}'
-output detectorUrl string = 'https://${detectorApp.properties.configuration.ingress.fqdn}/analyze'
+output webUrl string = 'https://${app.properties.configuration.ingress.fqdn}'
+output detectorUrl string = 'https://${app.properties.configuration.ingress.fqdn}/analyze'
 output storageAccountName string = storage.name
 output logicAppName string = logicApp.name
 output office365ConnectionName string = office365Connection.name

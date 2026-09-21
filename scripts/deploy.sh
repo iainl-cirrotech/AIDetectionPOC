@@ -14,12 +14,12 @@ deploy() {
     --resource-group "$RESOURCE_GROUP" \
     --template-file "$ROOT/infra/main.bicep" \
     --parameters namePrefix="$PREFIX" location="$LOCATION" sharedMailboxAddress="$SHARED_MAILBOX" \
-      detectorImage="$1" webImage="$2" \
+      appImage="$1" \
     --query 'properties.outputs' -o json
 }
 
 echo "Phase 1: create platform resources (placeholder images)..."
-deploy "$PLACEHOLDER" "$PLACEHOLDER" >/dev/null
+deploy "$PLACEHOLDER" >/dev/null
 
 ACR_NAME="$(az acr list -g "$RESOURCE_GROUP" --query "[?starts_with(name, '$PREFIX')].name | [0]" -o tsv)"
 LOGIN_SERVER="$(az acr show -n "$ACR_NAME" --query loginServer -o tsv)"
@@ -27,11 +27,11 @@ LOGIN_SERVER="$(az acr show -n "$ACR_NAME" --query loginServer -o tsv)"
 echo "Phase 2: build images into $ACR_NAME..."
 "$ROOT/scripts/build_push.sh" "$ACR_NAME" "$TAG"
 
-echo "Phase 3: deploy detector and web images..."
-OUT="$(deploy "$LOGIN_SERVER/ai-image-detector:$TAG" "$LOGIN_SERVER/ai-image-results:$TAG")"
+echo "Phase 3: deploy the combined .NET application image..."
+OUT="$(deploy "$LOGIN_SERVER/ai-image-detection:$TAG")"
 
 echo "Phase 4: outputs"
-echo "$OUT" | python3 -m json.tool
+echo "$OUT"
 
 cat <<EOF
 

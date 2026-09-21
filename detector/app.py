@@ -65,9 +65,9 @@ def overall_indicator(ai_probability: float | None, band: str, c2pa: dict) -> di
         return {"label": "Inconclusive", "severity": "Unknown", "basis": "none"}
 
     mapping = {
-        "High": "Likely AI-generated (classifier)",
-        "Medium": "Possible AI generation (classifier)",
-        "Low": "No AI indication (classifier)",
+        "High": "High AI-generation indication",
+        "Medium": "Review recommended - AI indication detected",
+        "Low": "Low AI-generation indication",
     }
     return {"label": mapping.get(band, "Inconclusive"), "severity": band, "basis": "classifier"}
 
@@ -80,8 +80,8 @@ def build_evidence(ai_probability, band, overall, c2pa, meta, model_desc, thumbn
         evidence.append("AI-generation classifier did not return a score.")
     else:
         evidence.append(
-            f"AI-generation classifier ({model_desc['name']}) scored "
-            f"{ai_probability:.0%} likelihood of AI generation ({band})."
+            f"AI-generation detector ({model_desc['name']}) scored "
+            f"{ai_probability:.0%} ({band}). This is a screening score, not proof of authenticity."
         )
     if c2pa.get("present"):
         line = f"C2PA Content Credentials present; validation state: {c2pa.get('validation_state')}."

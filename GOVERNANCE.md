@@ -32,19 +32,18 @@ case, no routing, no approval, no customer response.
         |  HTTPS POST, API-key protected, image bytes + email metadata headers
         v
  Azure Container App  <prefix>-detector           [same Azure region]
-        |  in-memory only: decode, SHA-256, C2PA verify, metadata read, classifier inference
+        |  decode, SHA-256, C2PA verify, metadata read, ONNX classifier inference
         +--> Azure Blob Storage  thumbnails/       [private container, no public access]
         +--> Azure Table Storage detections        [result record, no image pixels]
         +--> Application Insights / Log Analytics  [audit event]
         v
- Azure Container App  <prefix>-web                [same Azure region]
-        |  reads results and streams thumbnails via managed identity
-        v
- Browser (results table)
+ Browser (results table served by the same Container App)
 ```
 
-The original image is decoded and analysed **in memory** and is not written to disk or to storage.
-`PERSIST_ORIGINAL_IMAGE=false` is set on the detector container app. Only the thumbnail is stored.
+The original image is decoded and classified **in memory** and is not written to durable result
+storage. Because the official `c2patool` interface accepts a file path, provenance verification uses
+a randomly named operating-system temporary file which is deleted immediately in a `finally` block.
+Only the thumbnail is retained by the application.
 
 ## Step-by-step handling
 
@@ -52,10 +51,10 @@ The original image is decoded and analysed **in memory** and is not written to d
 |---|---|---|---|---|
 | Mail arrives | Exchange Online | M365 tenant geography | Full email + attachment | In mailbox, per M365 retention |
 | Mail polled | Logic App (`<prefix>-mail-pickup`) + Office 365 connector | Azure region | Email metadata + attachment bytes | Run history with secure inputs/outputs (payload masked and excluded from Log Analytics), retained 7 days |
-| Analysis | Container App (`<prefix>-detector`) | Azure region | Image bytes in memory | Nothing (original not persisted) |
+| Analysis | Container App (`<prefix>-detector`) | Azure region | Image bytes in memory and transient C2PA temp file | Nothing (original not retained) |
 | Thumbnail | Blob container `thumbnails` | Azure Storage, region | Downscaled JPEG | Yes, deleted by lifecycle policy |
 | Result | Table `detections` | Azure Storage, region | Metadata, score, evidence (no pixels) | Yes, removed by purge job |
-| Display | Container App (`<prefix>-web`) | Azure region | Result + thumbnail | No additional storage |
+| Display | Container App (`<prefix>-detector`) | Azure region | Result + thumbnail | No additional storage |
 | Audit | Application Insights + Log Analytics | Log Analytics workspace region | Processing events, hashes, model id | Yes, per workspace retention |
 
 ## Statements that can be made to the client
@@ -69,11 +68,10 @@ These follow from the selected services and settings, subject to the in-tenant c
   Microsoft AI models.
 - **Sent to an external or third-party model provider?** No. Inference runs inside the client's own
   Azure subscription. Model weights are downloaded from Hugging Face once at image build time and
-  baked into the container image; the runtime sets `HF_HUB_OFFLINE=1` and `TRANSFORMERS_OFFLINE=1`,
-  so no image or derived data is sent to Hugging Face or any external model API. C2PA verification
-  runs locally using the official C2PA trust list, which is pinned into the detector image at build
-  time, and the image is read from memory rather than a temporary file. No runtime egress to a model
-  provider is required, and egress can be blocked.
+  baked into the container image, so no image or derived data is sent to Hugging Face or any external
+  model API. C2PA verification runs locally using `c2patool` and the official C2PA trust list pinned
+  into the image; it uses a short-lived operating-system temporary file which is deleted immediately.
+  No runtime egress to a model provider is required, and egress can be blocked.
 - **Where processing takes place.** In the client's Azure subscription in the region chosen at
   deployment (`location`, default `uksouth`). Container Apps, Storage and Log Analytics are all
   created in that region. The mailbox itself is in the client's Microsoft 365 tenant.
@@ -82,8 +80,8 @@ These follow from the selected services and settings, subject to the in-tenant c
   with Azure Storage service-side encryption and in transit with TLS 1.2 minimum. Customer-managed
   keys via Key Vault can be added. The original image is not stored.
 - **Retention and deletion.** Thumbnails are deleted automatically by the storage lifecycle policy
-  after `thumbnailRetentionDays` (default 7). Result records are removed by `scripts/purge_results.py`
-  after `RESULTS_RETENTION_DAYS` (default 30). Log Analytics retention is `logsRetentionDays`
+  after `thumbnailRetentionDays` (default 7). The .NET application removes result records after
+  `RESULTS_RETENTION_DAYS` (default 30). Log Analytics retention is `logsRetentionDays`
   (default 90). Logic App run history is retained for `logicAppRetentionDays` (default 7, the
   minimum), and the connector trigger and the call to the detector have secure inputs/outputs
   enabled so the attachment payload is masked in run history and is not sent to Log Analytics.
@@ -110,14 +108,17 @@ These follow from the selected services and settings, subject to the in-tenant c
   notification plus an Azure Function using an app registration with `Mail.Read` on the mailbox.
 - The exact deployment region and that it satisfies the client's residency requirement.
 - Whether customer-managed keys and private endpoints are required. The demo currently uses
-  Microsoft-managed keys and public (but authenticated) endpoints; the detector and web Container
-  Apps use external ingress with the detector protected by an API key. Hardening options:
+  Microsoft-managed keys and public endpoints; the combined Container App uses external ingress and
+  the analysis API is protected by an API key. Browser upload is disabled in Azure. Hardening options:
   internal ingress, VNet integration, private endpoints, and Azure Front Door/WAF.
 - Final retention values, and whether immutable logging is needed.
-- The chosen model's licence and suitability. The default is
-  `capcheck/ai-human-generated-image-detection` (Apache-2.0 lineage); confirm the licence and
-  validate accuracy on representative images before the demo. The model is configurable via
-  `DETECTOR_MODEL_ID` / `DETECTOR_MODEL_REVISION`.
+- The chosen model's licence and suitability. The default is the MIT-licensed
+  `Thermostatic/community-forensics-frontier-detector-2026-08`, an independently fine-tuned
+  Community Forensics checkpoint with published calibration and robustness reports. Its own report
+  says that three robustness gates failed and that it remains weak on very small synthetic regions,
+  very low resolutions and some heavily laundered images. Dataset terms remain source-specific.
+  Validate it on representative genuine and generated claim images before the demo. The model is
+  configurable via `DETECTOR_MODEL_ID` / `DETECTOR_MODEL_REVISION`.
 
 ## Detection limitations (state these alongside any result)
 
@@ -127,6 +128,8 @@ These follow from the selected services and settings, subject to the in-tenant c
 - Metadata can be stripped or forged; absence of EXIF is not evidence of AI generation.
 - C2PA only helps when the creating tool embedded a manifest and it survived any re-encoding.
 - Thresholds for Low/Medium/High are configurable and should be tuned and documented per use case.
+- "Low indication" does not mean that an image is certified real. Medium and High results should be
+  treated as review signals, not automatic fraud findings.
 - This is not a legal, forensic or identity determination.
 
 ## Out of scope

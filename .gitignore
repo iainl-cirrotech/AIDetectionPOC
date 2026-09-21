@@ -8,3 +8,8 @@ samples/*.png
 !samples/.gitkeep
 *.egg-info/
 .DS_Store
+bin/
+obj/
+models/*.onnx
+!.gitkeep
+.local-store/

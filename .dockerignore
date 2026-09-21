@@ -1,0 +1,16 @@
+.git
+.agents
+.codex
+.venv*
+**/bin
+**/obj
+models/*.onnx
+.local-store
+samples
+tests
+detector/*
+!detector/c2pa_trust
+!detector/c2pa_trust/C2PA-TRUST-LIST.pem
+web
+*.pyc
+__pycache__

@@ -11,8 +11,16 @@ class Classifier:
         self.model_version = settings.model_version
         self.model_revision = settings.model_revision
         self._pipe = None
+        self._community_forensics = None
 
-        if self.mode == "hf":
+        if self.mode in {"community_forensics", "commfor"}:
+            from analysis.community_forensics import CommunityForensicsDetector
+
+            self._community_forensics = CommunityForensicsDetector(
+                self.model_id,
+                self.model_revision,
+            )
+        elif self.mode == "hf":
             from transformers import pipeline
 
             kwargs = {"model": self.model_id}
@@ -22,12 +30,16 @@ class Classifier:
 
     @property
     def describe(self) -> dict:
-        return {
+        description = {
             "mode": self.mode,
             "name": self.model_id,
             "version": self.model_version,
             "revision": self.model_revision or "default",
         }
+        if self._community_forensics is not None:
+            description["device"] = self._community_forensics.device
+            description["architecture"] = "Community Forensics ViT-S/16 (384px)"
+        return description
 
     def score(self, image) -> float | None:
         if self.mode == "disabled":
@@ -35,6 +47,8 @@ class Classifier:
         if self.mode == "mock":
             digest = hashlib.sha256(image.tobytes()[:4096]).digest()
             return int.from_bytes(digest[:4], "big") / 0xFFFFFFFF
+        if self._community_forensics is not None:
+            return self._community_forensics.score(image)
         predictions = self._pipe(image)
         return self._ai_probability(predictions)
 

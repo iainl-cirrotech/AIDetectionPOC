@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="src/AiDetection.Web/AiDetection.Web.csproj" />
+  <Project Path="tests/AiDetection.Tests/AiDetection.Tests.csproj" />
+</Solution>
