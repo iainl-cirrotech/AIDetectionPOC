@@ -16,7 +16,7 @@ public sealed class ResultRecordTests
             Email = new("subject", "sender", "received"),
             Image = new("image.jpg", 123, "abc", 10, 20, new(10, 20)),
             Detection = new(0.75, "High", new(0.35, 0.65)),
-            Overall = new("High AI-generation indication", "High", "classifier"),
+            Overall = new("Manual review recommended - high classifier score", "High", "classifier"),
             Provenance = new(new C2paResult()),
             Metadata = new MetadataResult { Findings = ["finding"] },
             Storage = new StorageInfo { ThumbnailBlob = "abc.jpg" },

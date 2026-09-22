@@ -36,7 +36,7 @@ public sealed class FileResultStoreTests
         Email = new(null, null, null),
         Image = new("test.jpg", 1, id, 1, 1, new(1, 1)),
         Detection = new(0.1, "Low", new(0.35, 0.65)),
-        Overall = new("Low AI-generation indication", "Low", "classifier"),
+        Overall = new("No strong classifier signal", "Low", "classifier"),
         Provenance = new(new C2paResult()),
         Metadata = new MetadataResult(),
         Storage = new StorageInfo(),

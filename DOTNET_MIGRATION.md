@@ -102,6 +102,11 @@ Completed on 2026-09-21.
   is empty, and prints the actual folder it reads/writes.
 - Updated `README.md`, `.env.example`, and `GOVERNANCE.md`. The legacy Python folders remain in the
   repository as migration reference but are no longer used by the local or Azure scripts.
+- Subsequently extended the mailbox workflow to send one fixed-format screening summary to the
+  original sender after all successful image attachments have been analysed. Each attachment now
+  receives a unique correlation reference, and response-message/self-sender guards reduce mail-loop
+  risk. For the POC, the standard Microsoft 365 mailbox connector processes only messages whose
+  subject contains `[AI-CHECK]` and sends the result from that authenticated account.
 
 ### Deliberate implementation details and deviations
 

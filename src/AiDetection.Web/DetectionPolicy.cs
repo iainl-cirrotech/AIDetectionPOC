@@ -37,9 +37,9 @@ public static class DetectionPolicy
         if (probability is null) return new("Inconclusive", "Unknown", "none");
         return band switch
         {
-            "High" => new("High AI-generation indication", "High", "classifier"),
-            "Medium" => new("Review recommended - AI indication detected", "Medium", "classifier"),
-            "Low" => new("Low AI-generation indication", "Low", "classifier"),
+            "High" => new("Manual review recommended - high classifier score", "High", "classifier"),
+            "Medium" => new("Manual review recommended - elevated classifier score", "Medium", "classifier"),
+            "Low" => new("No strong classifier signal", "Low", "classifier"),
             _ => new("Inconclusive", "Unknown", "none")
         };
     }

@@ -34,7 +34,7 @@ public sealed class DetectionPolicyTests
     public void Classifier_drives_indicator_when_provenance_is_absent()
     {
         var result = DetectionPolicy.Overall(0.8, "High", new C2paResult());
-        Assert.Equal("High AI-generation indication", result.Label);
+        Assert.Equal("Manual review recommended - high classifier score", result.Label);
         Assert.Equal("classifier", result.Basis);
     }
 

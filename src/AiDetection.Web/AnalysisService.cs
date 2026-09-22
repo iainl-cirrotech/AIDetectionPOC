@@ -112,7 +112,7 @@ public sealed class AnalysisService(
         if (result.Detection.AiProbability is null)
             evidence.Add("AI-generation classifier did not return a score.");
         else
-            evidence.Add($"AI-generation detector ({result.Model.Name}) scored {result.Detection.AiProbability:P0} ({result.Detection.Band}). This is a screening score, not proof of authenticity.");
+            evidence.Add($"AI-generation classifier ({result.Model.Name}) scored {result.Detection.AiProbability:P0} ({result.Detection.Band}). This is a review signal, not a determination that the image is fake or genuine.");
 
         var c2pa = result.Provenance.C2pa;
         if (c2pa.Present)

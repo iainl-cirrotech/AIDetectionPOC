@@ -1,11 +1,9 @@
 # AI Image Detection – proof of capability
 
 A .NET demonstration that accepts an image from a browser, API call, or shared-mailbox workflow,
-analyses it for signs of AI generation or alteration, and displays the result with audit evidence.
-It is a screening aid, not a determination that a claim is genuine or fraudulent.
-
-See [DOTNET_MIGRATION.md](DOTNET_MIGRATION.md) for the migration record and
-[GOVERNANCE.md](GOVERNANCE.md) for the data-handling position.
+analyses it for signs of AI generation or alteration, displays the result with audit evidence, and
+can email a cautious summary back to the original sender. It is a screening aid, not a determination
+that a claim is genuine or fraudulent.
 
 ## What it checks
 
@@ -71,13 +69,14 @@ dotnet test AIDetectionPOC.slnx
 ## Architecture
 
 ```text
-Browser upload or Exchange Online shared mailbox
+Browser upload or Exchange Online mailbox
   -> ASP.NET Core Container App
        -> image validation and metadata indicators
        -> ONNX Runtime classifier
        -> c2patool provenance verification
        -> Blob Storage (thumbnail only) + Table Storage (result)
        -> results page and API response
+  -> Logic App sends one result-summary email to the original sender
 ```
 
 The application is one ASP.NET Core process. Local mode uses a JSON Lines file and thumbnail folder;
@@ -100,18 +99,38 @@ detector/, web/            Retained legacy Python implementation for migration r
 
 ## Deploy to Azure
 
-Prerequisites: Azure CLI, an Azure subscription and an internal-use shared mailbox.
+Prerequisites: Azure CLI, an Azure subscription, permission to create resources and role assignments
+(Owner, or Contributor plus User Access Administrator), and a Microsoft 365 work mailbox.
 
 ```bash
+az login
+az account set --subscription '<subscription-id-or-name>'
+az group create --name rg-aidetect-demo --location uksouth
+
 export RESOURCE_GROUP=rg-aidetect-demo
-export SHARED_MAILBOX=ai-image-demo@yourdomain.com
+export MAILBOX_ADDRESS=iainl@byoma.com
 export LOCATION=uksouth
 ./scripts/deploy.sh
 ```
 
 The deployment creates one Container App, builds the .NET image in Azure Container Registry, embeds
 the pinned ONNX model and `c2patool`, and configures Blob/Table access through a user-assigned managed
-identity. Afterwards, authorise the generated Office 365 API connection and enable the Logic App.
+identity. The deployment script generates a random 256-bit detector API key unless
+`DETECTOR_API_KEY` is explicitly supplied. Afterwards, authorise the generated Office 365 API
+connection and enable the Logic App.
+Authorise the connection using the same Microsoft 365 account configured in `MAILBOX_ADDRESS`. The
+POC only processes messages with `[AI-CHECK]` in the subject, preventing unrelated image attachments
+in the mailbox from being submitted. For an email containing multiple images, the workflow sends one
+summary after all attachments have been processed. It sends nothing when no image succeeds. Each
+attachment request uses a unique correlation reference, preventing multiple images in one email from
+overwriting one another in the result store.
+
+After the script finishes, open the generated Office 365 connection in the Azure portal and
+authorise it, then enable the generated Logic App. Send an email containing an image attachment and
+`[AI-CHECK]` in its subject to the configured mailbox, then confirm that the sender receives one
+screening-summary email. The portal step
+cannot be completed by the unattended deployment because the connector requires an interactive
+Microsoft 365 sign-in and consent.
 
 Browser upload is enabled automatically for the local file backend and disabled by default for the
 Azure backend. The Logic App uses the API-key-protected analysis endpoint.

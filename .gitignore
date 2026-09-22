@@ -13,3 +13,4 @@ obj/
 models/*.onnx
 !.gitkeep
 .local-store/
+.azure/validate-status.json

@@ -7,7 +7,10 @@
         "defaultValue": {},
         "type": "Object"
       },
-      "sharedMailboxAddress": {
+      "mailboxAddress": {
+        "type": "String"
+      },
+      "mailSubjectFilter": {
         "type": "String"
       },
       "detectorUrl": {
@@ -18,7 +21,7 @@
       }
     },
     "triggers": {
-      "When_a_new_email_arrives_in_a_shared_mailbox": {
+      "When_a_new_email_arrives": {
         "type": "ApiConnection",
         "recurrence": {
           "frequency": "Minute",
@@ -40,18 +43,31 @@
             }
           },
           "method": "get",
-          "path": "/sharedmailboxes/@{encodeURIComponent(parameters('sharedMailboxAddress'))}/messages",
+          "path": "/v3/Mail/OnNewEmail",
           "queries": {
             "folderPath": "Inbox",
-            "hasAttachment": "true",
             "importance": "Any",
             "fetchOnlyWithAttachment": true,
-            "includeAttachments": true
+            "includeAttachments": true,
+            "subjectFilter": "@parameters('mailSubjectFilter')"
           }
         }
       }
     },
     "actions": {
+      "Initialize_analysis_results": {
+        "type": "InitializeVariable",
+        "inputs": {
+          "variables": [
+            {
+              "name": "analysisResults",
+              "type": "Array",
+              "value": []
+            }
+          ]
+        },
+        "runAfter": {}
+      },
       "Has_attachments": {
         "type": "If",
         "expression": {
@@ -61,6 +77,22 @@
                 "@length(coalesce(triggerOutputs()?['body/attachments'], json('[]')))",
                 0
               ]
+            },
+            {
+              "not": {
+                "equals": [
+                  "@toLower(coalesce(triggerOutputs()?['body/from'], ''))",
+                  "@toLower(parameters('mailboxAddress'))"
+                ]
+              }
+            },
+            {
+              "not": {
+                "startsWith": [
+                  "@toLower(coalesce(triggerOutputs()?['body/subject'], ''))",
+                  "image screening result:"
+                ]
+              }
             }
           ]
         },
@@ -107,18 +139,99 @@
                         "Content-Type": "@items('For_each_attachment')?['contentType']",
                         "x-filename": "@items('For_each_attachment')?['name']",
                         "x-email-subject": "@triggerOutputs()?['body/subject']",
-                        "x-email-sender": "@triggerOutputs()?['body/from']?['emailAddress']?['address']",
+                        "x-email-sender": "@triggerOutputs()?['body/from']",
                         "x-email-received": "@triggerOutputs()?['body/receivedDateTime']",
-                        "x-correlation-id": "@triggerOutputs()?['body/internetMessageId']",
+                        "x-correlation-id": "@guid()",
                         "x-api-key": "@parameters('detectorApiKey')"
                       },
                       "body": "@base64ToBinary(items('For_each_attachment')?['contentBytes'])"
+                    }
+                  },
+                  "Append_successful_result": {
+                    "type": "AppendToArrayVariable",
+                    "inputs": {
+                      "name": "analysisResults",
+                      "value": "@concat('<strong>', replace(replace(replace(coalesce(items('For_each_attachment')?['name'], 'Unnamed image'), '&', '&amp;'), '<', '&lt;'), '>', '&gt;'), '</strong><br>Overall result: ', coalesce(body('Send_to_detector')?['overall']?['label'], 'Result unavailable'), '<br>Classifier score: ', if(equals(body('Send_to_detector')?['detection']?['ai_probability'], null), 'not available', concat(formatNumber(mul(float(body('Send_to_detector')?['detection']?['ai_probability']), 100), '0.0'), '%')), ' (', coalesce(body('Send_to_detector')?['detection']?['band'], 'Unknown'), ')<br>C2PA: ', if(equals(body('Send_to_detector')?['provenance']?['c2pa']?['present'], true), 'present', 'absent'), '<br>Reference: ', coalesce(body('Send_to_detector')?['correlation_id'], 'not available'))"
+                    },
+                    "runAfter": {
+                      "Send_to_detector": [
+                        "Succeeded"
+                      ]
                     }
                   }
                 }
               }
             }
           }
+        },
+        "runAfter": {
+          "Initialize_analysis_results": [
+            "Succeeded"
+          ]
+        }
+      },
+      "Send_result_if_any": {
+        "type": "If",
+        "expression": {
+          "and": [
+            {
+              "greater": [
+                "@length(variables('analysisResults'))",
+                0
+              ]
+            },
+            {
+              "not": {
+                "equals": [
+                  "@coalesce(triggerOutputs()?['body/from'], '')",
+                  ""
+                ]
+              }
+            },
+            {
+              "not": {
+                "equals": [
+                  "@toLower(coalesce(triggerOutputs()?['body/from'], ''))",
+                  "@toLower(parameters('mailboxAddress'))"
+                ]
+              }
+            }
+          ]
+        },
+        "actions": {
+          "Send_result_email": {
+            "type": "ApiConnection",
+            "runtimeConfiguration": {
+              "secureData": {
+                "properties": [
+                  "inputs",
+                  "outputs"
+                ]
+              }
+            },
+            "inputs": {
+              "host": {
+                "connection": {
+                  "name": "@parameters('$connections')['office365']['connectionId']"
+                }
+              },
+              "method": "post",
+              "path": "/v2/Mail",
+              "body": {
+                "To": "@triggerOutputs()?['body/from']",
+                "Subject": "@concat('Image screening result: ', coalesce(triggerOutputs()?['body/subject'], '(no subject)'))",
+                "Body": "@concat('<p>We processed the image attachment(s) received by ', parameters('mailboxAddress'), '.</p><p>', join(variables('analysisResults'), '<br><br>'), '</p><p><strong>Important:</strong> This is an automated screening result, not proof that an image is genuine or fraudulent. Classifier results are probabilistic, and missing C2PA credentials do not indicate fakery.</p><hr><p style=\"color:#647080;font-size:12px;text-align:center\">&copy; 2026 Cirrotech Ltd. All rights reserved.</p>')",
+                "Importance": "Normal"
+              }
+            }
+          }
+        },
+        "runAfter": {
+          "Has_attachments": [
+            "Succeeded",
+            "Failed",
+            "TimedOut"
+          ]
         }
       }
     },

@@ -8,8 +8,11 @@ param location string = 'uksouth'
 @maxLength(12)
 param namePrefix string = 'aidetect'
 
-@description('Internal-use shared mailbox that the Logic App monitors.')
-param sharedMailboxAddress string
+@description('Microsoft 365 mailbox account authenticated by the Office 365 connection.')
+param mailboxAddress string
+
+@description('Only process messages whose subject contains this text.')
+param mailSubjectFilter string = '[AI-CHECK]'
 
 @description('Container image for the combined .NET detector API and results site.')
 param appImage string
@@ -29,9 +32,9 @@ param bandHighThreshold string = '0.65'
 @description('Probability at or above which the band is Medium.')
 param bandLowThreshold string = '0.35'
 
-@description('API key required by the detector endpoint. Generated if left blank.')
+@description('API key required by the detector endpoint. Supply a cryptographically random value.')
 @secure()
-param detectorApiKey string = ''
+param detectorApiKey string
 
 @description('Log Analytics retention in days.')
 param logsRetentionDays int = 90
@@ -51,16 +54,9 @@ param appMinReplicas int = 1
 var prefix = toLower(namePrefix)
 var storageName = take('${prefix}st${uniqueString(resourceGroup().id)}', 24)
 var acrName = take('${prefix}acr${uniqueString(resourceGroup().id)}', 50)
-var apiKey = empty(detectorApiKey) ? uniqueString(resourceGroup().id, 'detector-api-key') : detectorApiKey
+var apiKey = detectorApiKey
 var blobEndpoint = 'https://${storageName}.blob.${environment().suffixes.storage}'
-var workflowDefinition = union(json(loadTextContent('../logicapp/workflow.json')).definition, {
-  runtimeConfiguration: {
-    lifetime: {
-      unit: 'day'
-      count: logicAppRetentionDays
-    }
-  }
-})
+var workflowDefinition = json(loadTextContent('../logicapp/workflow.json')).definition
 
 resource logAnalytics 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
   name: '${prefix}-logs'
@@ -255,6 +251,37 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
             cpu: json('1.0')
             memory: '2Gi'
           }
+          probes: [
+            {
+              type: 'Startup'
+              httpGet: {
+                path: '/health'
+                port: 8080
+              }
+              periodSeconds: 10
+              failureThreshold: 30
+            }
+            {
+              type: 'Liveness'
+              httpGet: {
+                path: '/health'
+                port: 8080
+              }
+              initialDelaySeconds: 10
+              periodSeconds: 30
+              failureThreshold: 3
+            }
+            {
+              type: 'Readiness'
+              httpGet: {
+                path: '/health'
+                port: 8080
+              }
+              initialDelaySeconds: 5
+              periodSeconds: 10
+              failureThreshold: 3
+            }
+          ]
           env: [
             { name: 'AZURE_REGION', value: location }
             { name: 'AZURE_CLIENT_ID', value: identity.properties.clientId }
@@ -300,7 +327,16 @@ resource logicApp 'Microsoft.Logic/workflows@2019-05-01' = {
   name: '${prefix}-mail-pickup'
   location: location
   properties: {
+    state: 'Disabled'
     definition: workflowDefinition
+    // Supported by the Logic Apps 2019-05-01 API but absent from the current Bicep type metadata.
+    #disable-next-line BCP037
+    runtimeConfiguration: {
+      lifetime: {
+        unit: 'day'
+        count: logicAppRetentionDays
+      }
+    }
     parameters: {
       '$connections': {
         value: {
@@ -311,8 +347,11 @@ resource logicApp 'Microsoft.Logic/workflows@2019-05-01' = {
           }
         }
       }
-      sharedMailboxAddress: {
-        value: sharedMailboxAddress
+      mailboxAddress: {
+        value: mailboxAddress
+      }
+      mailSubjectFilter: {
+        value: mailSubjectFilter
       }
       detectorUrl: {
         value: 'https://${app.properties.configuration.ingress.fqdn}/analyze'
